@@ -73,6 +73,12 @@ jobs:
             echo "$summary."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Package available reports for email
+        id: report_archive
+        if: always()
+        continue-on-error: true
+        run: python scripts/create_report_archive.py
+
       - name: Upload PMD and CPD reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -81,6 +87,7 @@ jobs:
           path: |
             target/pmd.xml
             target/cpd.xml
+            target/quality-reports.zip
             target/reports/**
             target/surefire-reports/**
           if-no-files-found: warn
@@ -118,6 +125,7 @@ jobs:
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
           SMTP_TO: ${{ secrets.SMTP_TO }}
           SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          REPORT_ARCHIVE: target/quality-reports.zip
           MAIL_SUBJECT: "[${{ steps.result.outputs.kind }}] ${{ github.repository }} @ ${{ github.ref_name }}"
           MAIL_BODY: |
             Result: ${{ steps.result.outputs.summary }}
