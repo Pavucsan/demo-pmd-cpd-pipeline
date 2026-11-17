@@ -1,0 +1,145 @@
+name: Post-push PMD and CPD
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: post-push-quality-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Asynchronous PMD/CPD analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out pushed revision
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 with Maven cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Compile and run tests
+        id: build
+        continue-on-error: true
+        run: mvn --batch-mode --no-transfer-progress clean test
+
+      - name: Generate PMD and CPD reports
+        id: reports
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: mvn --batch-mode --no-transfer-progress pmd:pmd pmd:cpd
+
+      - name: Evaluate generated reports
+        id: evaluate
+        if: steps.build.outcome == 'success' && steps.reports.outcome == 'success'
+        continue-on-error: true
+        run: python scripts/evaluate_reports.py
+
+      - name: Classify result
+        id: result
+        if: always()
+        shell: bash
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          REPORT_OUTCOME: ${{ steps.reports.outcome }}
+          EVALUATE_OUTCOME: ${{ steps.evaluate.outcome }}
+          QUALITY_KIND: ${{ steps.evaluate.outputs.kind }}
+          QUALITY_SUMMARY: ${{ steps.evaluate.outputs.summary }}
+        run: |
+          if [[ "$BUILD_OUTCOME" != "success" || "$REPORT_OUTCOME" != "success" || "$EVALUATE_OUTCOME" != "success" ]]; then
+            kind="execution_failure"
+            summary="Build/tests, report generation, or report parsing failed"
+          else
+            kind="$QUALITY_KIND"
+            summary="$QUALITY_SUMMARY"
+          fi
+
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Post-push quality result"
+            echo
+            echo "**Classification:** \`$kind\`"
+            echo
+            echo "$summary."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload PMD and CPD reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmd-cpd-reports-${{ github.run_number }}
+          path: |
+            target/pmd.xml
+            target/cpd.xml
+            target/reports/**
+            target/surefire-reports/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Check email configuration
+        id: email_config
+        if: always() && steps.result.outputs.kind != 'success'
+        shell: bash
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
+        run: |
+          if [[ -n "$SMTP_HOST" && -n "$SMTP_PORT" && -n "$SMTP_USERNAME" && \
+                -n "$SMTP_PASSWORD" && -n "$SMTP_FROM" && -n "$SMTP_TO" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Email skipped: one or more SMTP secrets are not configured." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Send failure email
+        id: email
+        if: always() && steps.result.outputs.kind != 'success' && steps.email_config.outputs.configured == 'true'
+        continue-on-error: true
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_TO: ${{ secrets.SMTP_TO }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY }}
+          MAIL_SUBJECT: "[${{ steps.result.outputs.kind }}] ${{ github.repository }} @ ${{ github.ref_name }}"
+          MAIL_BODY: |
+            Result: ${{ steps.result.outputs.summary }}
+            Classification: ${{ steps.result.outputs.kind }}
+            Repository: ${{ github.repository }}
+            Branch/tag: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Actor: ${{ github.actor }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/send_failure_email.py
+
+      - name: Fail workflow with classified result
+        if: always() && steps.result.outputs.kind != 'success'
+        shell: bash
+        env:
+          RESULT_KIND: ${{ steps.result.outputs.kind }}
+          RESULT_SUMMARY: ${{ steps.result.outputs.summary }}
+          EMAIL_OUTCOME: ${{ steps.email.outcome }}
+        run: |
+          if [[ "$EMAIL_OUTCOME" == "failure" ]]; then
+            echo "Warning: the notification email could not be sent." >&2
+          fi
+          echo "${RESULT_KIND}: ${RESULT_SUMMARY}" >&2
+          exit 1
+
