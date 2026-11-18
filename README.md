@@ -6,7 +6,7 @@ This minimal Java 21/Maven project demonstrates a non-blocking developer flow:
 2. GitHub Actions starts after the push and runs tests, PMD, and CPD asynchronously.
 3. Reports are uploaded even when violations are found.
 4. Failures are classified as either `quality_violation` or `execution_failure`.
-5. A failure email with an available-report ZIP attachment is sent when the SMTP repository secrets are configured.
+5. A failure email with the GitHub Actions run link is sent when the SMTP repository secrets are configured.
 
 The workflow can show a failed check on a commit, but the intended demo policy does **not** make that quality check required for merging. Merge control is reviewer approval only.
 
@@ -50,7 +50,7 @@ In GitHub, open **Settings → Secrets and variables → Actions** and add these
 
 The password is passed only through the Actions secret context and is never printed. The mail script requires certificate-validated TLS (`STARTTLS` or implicit SSL); plaintext SMTP is rejected. If required secrets are absent, analysis still runs and the job summary explains that email was skipped. If sending fails, the original quality classification remains visible and the workflow still fails.
 
-Failure emails attach `quality-reports.zip`, containing all PMD, CPD, HTML, and test reports produced by that run. The run link remains in the message. If an execution failure occurs before reports can be generated, the email is still sent without an attachment and clearly says that the archive was unavailable.
+Failure emails do not contain attachments because mail providers may block archives containing generated HTML assets. The message links to the GitHub Actions run, where authorized users can safely download the complete `pmd-cpd-reports-*` artifact containing PMD, CPD, HTML, and test reports.
 
 ## Reviewer-only merge approval
 

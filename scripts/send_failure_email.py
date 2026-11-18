@@ -1,7 +1,6 @@
 """Send a GitHub Actions failure email using only Python's standard library."""
 
 import os
-from pathlib import Path
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -27,21 +26,7 @@ def main() -> None:
     message["From"] = sender
     message["To"] = ", ".join(recipients)
     message["Subject"] = required("MAIL_SUBJECT")
-    archive = Path(os.environ.get("REPORT_ARCHIVE", "target/quality-reports.zip"))
-    attachment_status = (
-        f"Attached report archive: {archive.name}"
-        if archive.is_file()
-        else "Report archive: unavailable for this run"
-    )
-    message.set_content(f"{required('MAIL_BODY').rstrip()}\n{attachment_status}\n")
-
-    if archive.is_file():
-        message.add_attachment(
-            archive.read_bytes(),
-            maintype="application",
-            subtype="zip",
-            filename=archive.name,
-        )
+    message.set_content(required("MAIL_BODY"))
 
     context = ssl.create_default_context()
     if security == "ssl":
